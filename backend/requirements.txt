@@ -4,3 +4,7 @@ pydantic
 python-dotenv
 pytest
 httpx
+requests
+beautifulsoup4
+lxml
+playwright
