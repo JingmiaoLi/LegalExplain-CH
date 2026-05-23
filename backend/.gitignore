@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment variables
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.vscode/
+
+# Node / frontend later
+node_modules/
+.next/
+out/
+dist/
+package-lock.json
+
+# Data artifacts
+data/raw/
+data/processed/

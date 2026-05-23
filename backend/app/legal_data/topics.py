@@ -1,0 +1,66 @@
+ISSUE_CONFIG = {
+    "immediate_dismissal": {
+        "label": "Immediate dismissal",
+        "description": "Termination without notice due to an alleged serious reason.",
+        "keywords": [
+            "immediate",
+            "immediately",
+            "without notice",
+            "fired on the spot",
+            "dismissed immediately",
+            "fristlos",
+        ],
+    },
+    "abusive_termination": {
+        "label": "Abusive termination",
+        "description": "Ordinary termination that may be unlawful because of motive or context.",
+        "keywords": [
+            "abusive",
+            "unfair",
+            "retaliation",
+            "complaint",
+            "pregnancy",
+            "union",
+            "missbräuchlich",
+        ],
+    },
+    "notice_period": {
+        "label": "Notice period",
+        "description": "Rules concerning how much notice must be given before employment ends.",
+        "keywords": [
+            "notice period",
+            "termination period",
+            "probation",
+            "one month",
+            "two months",
+            "three months",
+            "kündigungsfrist",
+        ],
+    },
+    "salary_during_illness": {
+        "label": "Salary during illness",
+        "description": "Continued salary payment when an employee cannot work due to illness.",
+        "keywords": [
+            "illness",
+            "sick",
+            "sick leave",
+            "doctor certificate",
+            "unable to work",
+            "continued salary",
+            "krank",
+        ],
+    },
+    "non_compete": {
+        "label": "Non-compete clause",
+        "description": "Post-employment restrictions on working for competitors or clients.",
+        "keywords": [
+            "non-compete",
+            "non compete",
+            "competition",
+            "competitor",
+            "client restriction",
+            "after leaving",
+            "konkurrenzverbot",
+        ],
+    },
+}
