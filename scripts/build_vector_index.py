@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import chromadb
+from chromadb.api.types import Metadata
 from sentence_transformers import SentenceTransformer
 
 
@@ -57,7 +58,7 @@ def chunk_to_document(chunk: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
-def build_metadata(article: dict[str, Any]) -> dict[str, Any]:
+def build_metadata(article: dict[str, Any]) -> Metadata:
     """
     Chroma metadata values must be simple scalar types.
     Lists/dicts should be converted to strings.
@@ -65,12 +66,16 @@ def build_metadata(article: dict[str, Any]) -> dict[str, Any]:
     title_path = article.get("title_path", [])
 
     return {
-        "chunk_id": article.get("chunk_id", ""),
-        "source_label": article.get("source_label", ""),
+        "chunk_id": str(article.get("chunk_id", "")),
+        "article_number": str(article.get("article_number", "")),
+        "source_label": str(article.get("source_label", "")),
         "word_count": int(article.get("word_count", 0)),
         "title_path": json.dumps(title_path, ensure_ascii=False),
         "num_paragraphs": len(article.get("paragraphs", [])),
         "num_footnotes": len(article.get("footnotes", [])),
+        "source_url": str(article.get("source_url", "")),
+        "source_type": str(article.get("source_type", "")),
+        "status": str(article.get("status", "")),
     }
 
 
@@ -82,7 +87,7 @@ def main() -> None:
 
     documents: list[str] = []
     ids: list[str] = []
-    metadatas: list[dict[str, str | int | float | bool]] = []
+    metadatas: list[Metadata] = []
 
     for idx, chunk in enumerate(chunks):
         document = chunk_to_document(chunk)
@@ -136,13 +141,14 @@ def main() -> None:
         ids=ids,
         documents=documents,
         embeddings=embeddings,
-        metadatas=metadatas, # type: ignore
+        metadatas=metadatas,
     )
 
     print("Vector index built successfully.")
     print(f"Collection name: {COLLECTION_NAME}")
     print(f"Indexed documents: {collection.count()}")
     print(f"Persisted at: {CHROMA_DIR}")
+
 
 if __name__ == "__main__":
     main()

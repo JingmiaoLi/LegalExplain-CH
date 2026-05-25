@@ -5,6 +5,7 @@ from typing import Any
 
 from backend.retrieval.dense_retriever import DenseRetriever
 from backend.retrieval.keyword_retriever import KeywordRetriever
+from backend.retrieval.reranker import CrossEncoderReranker
 from backend.retrieval.schemas import RetrievedChunk, RetrievalConfig, RetrievalResponse
 
 
@@ -18,20 +19,21 @@ class HybridRetriever:
 
     Important design:
     - retrieve_candidates() returns a larger fused candidate pool.
-    - retrieve() returns the final top_k results when no model reranker is used.
-
-    When a model reranker is enabled later, it should consume the output of
-    retrieve_candidates(), not only the final top_k results.
+    - retrieve() returns the final top_k results, with or without reranking
+      depending on config.enable_reranker.
+    - retrieve_without_reranker() is kept for explicit debugging/comparison.
     """
 
     def __init__(
         self,
         dense_retriever: DenseRetriever | None = None,
         keyword_retriever: KeywordRetriever | None = None,
+        reranker: CrossEncoderReranker | None = None,
         rrf_k: int = 60,
     ) -> None:
         self.dense_retriever = dense_retriever or DenseRetriever()
         self.keyword_retriever = keyword_retriever or KeywordRetriever()
+        self.reranker = reranker or CrossEncoderReranker()
         self.rrf_k = rrf_k
 
     def retrieve_candidates(
@@ -42,9 +44,8 @@ class HybridRetriever:
         """
         Return a fused candidate pool using RRF.
 
-        This is the method that should be used before a reranker. It keeps
-        config.candidate_k fused candidates, so potentially useful chunks are
-        not discarded too early.
+        This is the method used before reranking. It keeps config.candidate_k
+        fused candidates, so potentially useful chunks are not discarded too early.
         """
         if config is None:
             config = RetrievalConfig()
@@ -100,11 +101,74 @@ class HybridRetriever:
         config: RetrievalConfig | None = None,
     ) -> RetrievalResponse:
         """
-        Return final top_k hybrid results without a model reranker.
+        Return final top_k hybrid results.
 
-        This method first builds a larger fused candidate pool, then truncates it
-        to config.top_k. If a model reranker is used later, call
-        retrieve_candidates() instead.
+        If config.enable_reranker is True, this method applies the cross-encoder
+        reranker to the larger candidate pool. Otherwise, it directly returns
+        the top_k fused hybrid results.
+        """
+        if config is None:
+            config = RetrievalConfig()
+
+        config.validate()
+
+        candidate_response = self.retrieve_candidates(
+            query=query,
+            config=config,
+        )
+
+        if config.enable_reranker:
+            final_chunks = self.reranker.rerank(
+                query=query,
+                results=candidate_response.chunks,
+                top_k=config.top_k,
+            )
+
+            debug_info = dict(candidate_response.debug_info)
+            debug_info["mode"] = "final_with_cross_encoder_reranker"
+            debug_info["top_k"] = config.top_k
+            debug_info["candidate_count_before_reranking"] = len(
+                candidate_response.chunks
+            )
+            debug_info["final_count_after_reranking"] = len(final_chunks)
+            debug_info["reranker"] = self.reranker.config.model_name
+
+            return RetrievalResponse(
+                query=query,
+                chunks=final_chunks,
+                retrieval_method="hybrid",
+                hop_count=1,
+                debug_info=debug_info,
+            )
+
+        final_chunks = self._take_top_k(
+            chunks=candidate_response.chunks,
+            top_k=config.top_k,
+        )
+
+        debug_info = dict(candidate_response.debug_info)
+        debug_info["mode"] = "final_without_reranker"
+        debug_info["top_k"] = config.top_k
+
+        return RetrievalResponse(
+            query=query,
+            chunks=final_chunks,
+            retrieval_method="hybrid",
+            hop_count=1,
+            debug_info=debug_info,
+        )
+
+    def retrieve_without_reranker(
+        self,
+        query: str,
+        config: RetrievalConfig | None = None,
+    ) -> RetrievalResponse:
+        """
+        Return final top_k hybrid results without the model reranker.
+
+        This is useful for debugging and comparing:
+        - hybrid retrieval only
+        - hybrid retrieval + cross-encoder reranking
         """
         if config is None:
             config = RetrievalConfig()
@@ -225,3 +289,4 @@ class HybridRetriever:
             )
 
         return final_chunks
+    

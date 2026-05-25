@@ -24,6 +24,18 @@ def normalize_article_number(value: str) -> str:
 
     return value
 
+def article_number_to_chunk_id(article_number: str) -> str:
+    """
+    Convert a display article number into a stable chunk id.
+
+    Examples:
+    337 -> art_337
+    321a -> art_321a
+    329g bis -> art_329g_bis
+    """
+    normalized = normalize_article_number(article_number)
+    safe_number = normalized.lower().replace(" ", "_")
+    return f"art_{safe_number}"
 
 def clean_title_path(raw_title_path: Any) -> list[str]:
     """
@@ -170,7 +182,7 @@ def build_article_chunks(articles: list[dict[str, Any]]) -> dict[str, Any]:
         source_label = article.get("source_label") or f"Art. {article_number}"
 
         chunk = {
-            "chunk_id": f"art_{article_number}",
+            "chunk_id": article_number_to_chunk_id(article_number),
             "chunk_type": "article",
             "article_number": article_number,
             "source_label": source_label,
@@ -232,6 +244,7 @@ def print_sample(output: dict[str, Any]) -> None:
 
         print("\n" + "-" * 80)
         print(f"chunk_id: {chunk['chunk_id']}")
+        print(f"article_number: {chunk['article_number']}")
         print(f"source_label: {chunk['source_label']}")
         print(f"title_path: {chunk['title_path']}")
         print(f"paragraph_count: {chunk['paragraph_count']}")

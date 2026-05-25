@@ -32,15 +32,35 @@ def article_id_to_number(article_id: str) -> str:
     Examples:
     art_319 -> 319
     art_324_a -> 324a
-    art_329_g_bis -> 329gbis
+    art_329_g_bis -> 329g bis
     """
     raw = article_id.removeprefix("art_")
     parts = raw.split("_")
 
-    number = parts[0]
-    suffix = "".join(parts[1:])
+    if not parts:
+        return ""
 
-    return f"{number}{suffix}"
+    number = parts[0]
+    suffix_parts = parts[1:]
+
+    if not suffix_parts:
+        return number
+
+    letter_suffixes: list[str] = []
+    word_suffixes: list[str] = []
+
+    for part in suffix_parts:
+        if len(part) == 1 and part.isalpha():
+            letter_suffixes.append(part)
+        else:
+            word_suffixes.append(part)
+
+    article_number = number + "".join(letter_suffixes)
+
+    if word_suffixes:
+        article_number += " " + " ".join(word_suffixes)
+
+    return article_number
 
 def remove_footnote_container(article: Tag) -> None:
     for footnote_div in article.select("div.footnotes"):
