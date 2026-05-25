@@ -27,12 +27,12 @@ def infer_article_status(paragraphs: list[dict], footnotes: list[dict]) -> str:
 
 def article_id_to_number(article_id: str) -> str:
     """
-    Convert Fedlex anchor IDs into readable article numbers.
+    Convert Fedlex anchor IDs into clean article numbers.
 
     Examples:
-    art_319 -> Art. 319
-    art_324_a -> Art. 324a
-    art_329_g_bis -> Art. 329gbis
+    art_319 -> 319
+    art_324_a -> 324a
+    art_329_g_bis -> 329gbis
     """
     raw = article_id.removeprefix("art_")
     parts = raw.split("_")
@@ -40,8 +40,7 @@ def article_id_to_number(article_id: str) -> str:
     number = parts[0]
     suffix = "".join(parts[1:])
 
-    return f"Art. {number}{suffix}"
-
+    return f"{number}{suffix}"
 
 def remove_footnote_container(article: Tag) -> None:
     for footnote_div in article.select("div.footnotes"):
@@ -257,6 +256,7 @@ def parse_articles() -> list[dict]:
                 "language": "en",
                 "source_url": f"{BASE_SOURCE_URL}#{article_id}",
                 "source_type": "fedlex_print_view_snapshot",
+                "source_label": f"Art. {article_number}",
                 "title_path": get_title_path(article),
                 "paragraphs": paragraphs,
                 "text": full_text,
@@ -281,7 +281,7 @@ def main() -> None:
     print(f"Parsed articles: {len(articles)}")
     print(f"Saved to: {OUTPUT_PATH}")
 
-    for target in ["Art. 319", "Art. 337", "Art. 340", "Art. 362"]:
+    for target in ["319", "337", "340", "362"]:
         matches = [article for article in articles if article["article_number"] == target]
         if not matches:
             print(f"{target}: NOT FOUND")

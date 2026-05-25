@@ -8,5 +8,7 @@ requests
 beautifulsoup4
 lxml
 playwright
-networkx
-pyvis
+chromadb
+sentence-transformers
+rank-bm25
+nltk
