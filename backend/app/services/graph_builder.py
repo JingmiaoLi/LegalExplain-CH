@@ -1,4 +1,4 @@
-from app.schemas.legal import (
+from backend.app.schemas.legal import (
     LegalArticle,
     LegalGraph,
     LegalGraphEdge,

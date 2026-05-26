@@ -1,5 +1,5 @@
-from app.legal_data.topics import ISSUE_CONFIG
-from app.schemas.legal import LegalIssue
+from backend.app.legal_data.topics import ISSUE_CONFIG
+from backend.app.schemas.legal import LegalIssue
 
 
 def classify_issues(scenario: str) -> list[LegalIssue]:

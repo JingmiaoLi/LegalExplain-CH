@@ -1,4 +1,4 @@
-from app.schemas.legal import LegalArticle, LegalExplanation, LegalIssue
+from backend.app.schemas.legal import LegalArticle, LegalExplanation, LegalIssue
 
 
 def generate_explanation(

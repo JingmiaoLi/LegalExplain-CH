@@ -1,8 +1,8 @@
-from app.schemas.legal import AnalyzeResponse
-from app.services.article_retriever import retrieve_articles
-from app.services.explanation_generator import generate_explanation
-from app.services.graph_builder import build_graph
-from app.services.issue_classifier import classify_issues
+from backend.app.schemas.legal import AnalyzeResponse
+from backend.app.services.article_retriever import retrieve_articles
+from backend.app.services.explanation_generator import generate_explanation
+from backend.app.services.graph_builder import build_graph
+from backend.app.services.issue_classifier import classify_issues
 
 
 def run_legal_workflow(scenario: str) -> AnalyzeResponse:

@@ -1,4 +1,4 @@
-from app.schemas.legal import LegalArticle
+from backend.app.schemas.legal import LegalArticle
 
 
 LEGAL_ARTICLES = [

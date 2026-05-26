@@ -1,4 +1,4 @@
-from app.services.issue_classifier import classify_issues
+from backend.app.services.issue_classifier import classify_issues
 
 
 def test_classify_immediate_dismissal():

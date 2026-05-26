@@ -7,6 +7,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from dotenv import load_dotenv
+
 from backend.generation.prompts import SYSTEM_PROMPT, build_answer_prompt
 from backend.retrieval.hybrid_retriever import HybridRetriever
 from backend.retrieval.schemas import RetrievalConfig, RetrievalResponse
@@ -67,6 +69,8 @@ class AnswerGenerator:
         retriever: HybridRetriever | None = None,
         config: AnswerGenerationConfig | None = None,
     ) -> None:
+        load_dotenv()
+        
         self.retriever = retriever or HybridRetriever()
         self.config = config or AnswerGenerationConfig()
 

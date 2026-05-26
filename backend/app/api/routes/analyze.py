@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from app.schemas.legal import AnalyzeRequest, AnalyzeResponse
-from app.services.workflow import run_legal_workflow
+from backend.app.schemas.legal import AnalyzeRequest, AnalyzeResponse
+from backend.app.services.workflow import run_legal_workflow
 
 router = APIRouter(prefix="/analyze", tags=["analyze"])
 

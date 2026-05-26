@@ -1,5 +1,5 @@
-from app.legal_data.articles import LEGAL_ARTICLES
-from app.schemas.legal import LegalArticle, LegalIssue
+from backend.app.legal_data.articles import LEGAL_ARTICLES
+from backend.app.schemas.legal import LegalArticle, LegalIssue
 
 
 def retrieve_articles(issues: list[LegalIssue]) -> list[LegalArticle]:

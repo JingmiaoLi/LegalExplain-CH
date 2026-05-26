@@ -1,4 +1,4 @@
-from app.services.workflow import run_legal_workflow
+from backend.app.services.workflow import run_legal_workflow
 
 
 def test_workflow_returns_structured_response():

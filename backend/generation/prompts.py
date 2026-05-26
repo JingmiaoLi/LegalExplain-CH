@@ -72,17 +72,44 @@ Retrieved legal sources:
 Task:
 Answer the user's question using only the retrieved legal sources.
 
+Core rules:
+- Do not invent legal rules, article numbers, procedures, cases, remedies, deadlines, or exceptions.
+- Do not mention article numbers that are not included in the retrieved sources.
+- Do not write phrases like "Art. X is not provided".
+- Do not refer to "retrieved sources" in the final answer.
+- Use article references naturally, for example "under Art. 337" or "Art. 337c provides...".
+- Before writing the final answer, identify all distinct legal points in the retrieved sources that directly affect the user's question.
+- Relevant legal points may include requirements, rights, duties, consequences, exceptions, limitations, remedies, deadlines, procedural steps, and fact-dependent conditions.
+- Include every directly relevant legal point in the main answer, not only in the "Relevant legal points" section.
+- Do not omit consequences, exceptions, remedies, deadlines, duties, or conditions when they are directly relevant to the question and present in the cited sources.
+- If several retrieved articles address different parts of the question, integrate those parts into the main answer before listing legal points.
+- If a consequence applies only when a condition is met, state that condition explicitly.
+- Avoid vague references such as "if the employer does so" or "in that case" when the legal condition matters.
+- Prefer careful wording such as "may be entitled", "may apply", or "depends on the circumstances" when the outcome depends on facts, discretion, or court assessment.
+- Keep the answer concise, but do not sacrifice legal completeness.
+
 Required answer format:
 
-Answer:
-Give a clear and concise explanation.
+Start directly with the answer. Do not write a heading such as "Answer:".
 
-Relevant sources:
-List the most relevant articles used, with one short explanation for each.
+In the main answer:
+- Directly answer the user's question.
+- Explain the applicable legal rule.
+- Include any directly relevant consequences, limitations, exceptions, remedies, deadlines, duties, or procedural requirements found in the cited sources.
+- Mention the cited article naturally next to the legal point it supports.
+- If the available legal sources provide a general standard but not concrete examples, explain the general standard and say that its application depends on the specific facts.
 
-Limitations:
-Mention if the retrieved sources do not fully answer the question or if more facts are needed.
+Relevant legal points:
+List only the most relevant articles used, with one short explanation for each.
+Do not use this section as a substitute for the main answer; the main answer must already contain the important legal points.
+
+Context needed:
+Briefly mention what facts would be needed for a more precise assessment.
+Focus on concrete facts, not on limitations of the retrieval process.
+Do not say "the retrieved sources do not provide information".
+If the legal source gives a general standard but not concrete examples, say that the application depends on the specific facts.
 
 Important note:
-This is legal information based on the retrieved sources, not legal advice.
+This is legal information based on the cited sources, not legal advice.
 """.strip()
+

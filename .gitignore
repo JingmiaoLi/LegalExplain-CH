@@ -24,3 +24,10 @@ dist/
 data/raw/
 data/processed/
 data/vectorstore/
+# frontend
+frontend/node_modules/
+frontend/dist/
+node_modules/
+
+# env
+.env
