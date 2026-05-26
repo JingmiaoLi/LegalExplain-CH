@@ -23,6 +23,133 @@ function getSourceUrl(source: SourceItem): string | null {
   return null;
 }
 
+function findSourceByArticle(
+  sources: AskResponse["sources"],
+  articleNumber: string,
+): SourceItem | null {
+  return (
+    sources.find(
+      (source) => source.article_number.toLowerCase() === articleNumber,
+    ) ?? null
+  );
+}
+
+function ArticleChip({ source }: { source: SourceItem }) {
+  const sourceUrl = getSourceUrl(source);
+
+  if (sourceUrl) {
+    return (
+      <a
+        href={sourceUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="graphArticleChip"
+      >
+        {source.source_label}
+      </a>
+    );
+  }
+
+  return <span className="graphArticleChip">{source.source_label}</span>;
+}
+
+function LegalReasoningGraph({
+  sources,
+}: {
+  sources: AskResponse["sources"];
+}) {
+  const art337 = findSourceByArticle(sources, "337");
+  const art337c = findSourceByArticle(sources, "337c");
+  const art336c = findSourceByArticle(sources, "336c");
+
+  if (!art337 && !art337c && !art336c) {
+    return null;
+  }
+
+  return (
+    <section className="legalGraph">
+      <div className="legalGraphHeader">
+        <span className="legalGraphBadge">Legal reasoning map</span>
+        <p>
+          A visual path showing the main legal condition and possible outcomes.
+        </p>
+      </div>
+
+      <div className="graphCanvas">
+
+        <div className="graphNode graphNodeIssue">
+          <span className="graphNodeLabel">Legal issue</span>
+          <h3>Immediate termination by the employer</h3>
+          <p>
+            The key issue is whether the employer can end the employment
+            relationship immediately without ordinary notice.
+          </p>
+        </div>
+
+        <div className="graphArrow">↓</div>
+
+        {art337 && (
+          <div className="graphNode graphNodeCondition">
+            <span className="graphNodeLabel">Condition</span>
+            <h3>Is there good cause?</h3>
+            <p>
+              Immediate termination depends on whether good cause exists. Good
+              cause means that continuing the employment relationship would be
+              unreasonable in good faith.
+            </p>
+            <ArticleChip source={art337} />
+          </div>
+        )}
+
+        <div className="graphBranches">
+          <div className="graphBranch">
+            <div className="branchLabel branchYes">Yes</div>
+            <div className="graphNode graphNodeOutcome">
+              <span className="graphNodeLabel">Possible outcome</span>
+              <h3>Immediate termination may be justified</h3>
+              <p>
+                If good cause exists, immediate termination may be justified,               
+                subject to the specific facts and court assessment.
+              </p>
+              {art337 && <ArticleChip source={art337} />}
+            </div>
+          </div>
+
+          <div className="graphBranch">
+            <div className="branchLabel branchNo">No</div>
+            <div className="graphNode graphNodeOutcome graphNodeConsequence">
+              <span className="graphNodeLabel">Consequence</span>
+              <h3>Damages or compensation may apply</h3>
+              <p>
+                If the employer terminates immediately without good cause,
+                damages and possible compensation may apply.
+              </p>
+              {art337c && <ArticleChip source={art337c} />}
+            </div>
+          </div>
+        </div>
+
+        {art336c && (
+          <>
+            <div className="graphArrow">↓</div>
+
+            <div className="graphNode graphNodeRelated">
+              <span className="graphNodeLabel">Additional check</span>
+              <h3>Protected timing rules may matter</h3>
+              <p>
+                If the timing falls within a protected period, termination restrictions may
+                also need to be checked.
+              </p>
+              <ArticleChip source={art336c} />
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+
 function renderAnswerWithSourceLinks(
   answer: string,
   sources: AskResponse["sources"],
@@ -221,6 +348,9 @@ function App() {
                   <div className="answerText">
                     {renderAnswerWithSourceLinks(result.answer, result.sources)}
                   </div>
+
+                  <LegalReasoningGraph sources={result.sources} />
+
                 </div>
               </div>
             )}
