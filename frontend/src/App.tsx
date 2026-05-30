@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { askLawRag } from "./api";
 import type { AskResponse, LlmMode, SourceItem } from "./api";
+
+import { LegalReasoningGraph } from "./components/legal_reasoning_graph/legal_reasoning_graph";
 
 import "./App.css";
 
@@ -23,136 +25,10 @@ function getSourceUrl(source: SourceItem): string | null {
   return null;
 }
 
-function findSourceByArticle(
-  sources: AskResponse["sources"],
-  articleNumber: string,
-): SourceItem | null {
-  return (
-    sources.find(
-      (source) => source.article_number.toLowerCase() === articleNumber,
-    ) ?? null
-  );
-}
-
-function ArticleChip({ source }: { source: SourceItem }) {
-  const sourceUrl = getSourceUrl(source);
-
-  if (sourceUrl) {
-    return (
-      <a
-        href={sourceUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="graphArticleChip"
-      >
-        {source.source_label}
-      </a>
-    );
-  }
-
-  return <span className="graphArticleChip">{source.source_label}</span>;
-}
-
-function LegalReasoningGraph({
-  sources,
-}: {
-  sources: AskResponse["sources"];
-}) {
-  const art337 = findSourceByArticle(sources, "337");
-  const art337c = findSourceByArticle(sources, "337c");
-  const art336c = findSourceByArticle(sources, "336c");
-
-  if (!art337 && !art337c && !art336c) {
-    return null;
-  }
-
-  return (
-    <section className="legalGraph">
-      <div className="legalGraphHeader">
-        <span className="legalGraphBadge">Legal reasoning map</span>
-        <p>
-          A visual path showing the main legal condition and possible outcomes.
-        </p>
-      </div>
-
-      <div className="graphCanvas">
-
-        <div className="graphNode graphNodeIssue">
-          <span className="graphNodeLabel">Legal issue</span>
-          <h3>Immediate termination by the employer</h3>
-          <p>
-            The key issue is whether the employer can end the employment
-            relationship immediately without ordinary notice.
-          </p>
-        </div>
-
-        <div className="graphArrow">↓</div>
-
-        {art337 && (
-          <div className="graphNode graphNodeCondition">
-            <span className="graphNodeLabel">Condition</span>
-            <h3>Is there good cause?</h3>
-            <p>
-              Immediate termination depends on whether good cause exists. Good
-              cause means that continuing the employment relationship would be
-              unreasonable in good faith.
-            </p>
-            <ArticleChip source={art337} />
-          </div>
-        )}
-
-        <div className="graphBranches">
-          <div className="graphBranch">
-            <div className="branchLabel branchYes">Yes</div>
-            <div className="graphNode graphNodeOutcome">
-              <span className="graphNodeLabel">Possible outcome</span>
-              <h3>Immediate termination may be justified</h3>
-              <p>
-                If good cause exists, immediate termination may be justified,               
-                subject to the specific facts and court assessment.
-              </p>
-              {art337 && <ArticleChip source={art337} />}
-            </div>
-          </div>
-
-          <div className="graphBranch">
-            <div className="branchLabel branchNo">No</div>
-            <div className="graphNode graphNodeOutcome graphNodeConsequence">
-              <span className="graphNodeLabel">Consequence</span>
-              <h3>Damages or compensation may apply</h3>
-              <p>
-                If the employer terminates immediately without good cause,
-                damages and possible compensation may apply.
-              </p>
-              {art337c && <ArticleChip source={art337c} />}
-            </div>
-          </div>
-        </div>
-
-        {art336c && (
-          <>
-            <div className="graphArrow">↓</div>
-
-            <div className="graphNode graphNodeRelated">
-              <span className="graphNodeLabel">Additional check</span>
-              <h3>Protected timing rules may matter</h3>
-              <p>
-                If the timing falls within a protected period, termination restrictions may
-                also need to be checked.
-              </p>
-              <ArticleChip source={art336c} />
-            </div>
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-
-
 function renderAnswerWithSourceLinks(
   answer: string,
   sources: AskResponse["sources"],
+  keyPrefix = "answer",
 ): ReactNode[] {
   const sourceUrlByArticle = new Map<string, string>();
 
@@ -197,7 +73,7 @@ function renderAnswerWithSourceLinks(
     if (url) {
       parts.push(
         <a
-          key={`${matchedText}-${matchIndex}`}
+          key={`${keyPrefix}-${matchedText}-${matchIndex}`}
           href={url}
           target="_blank"
           rel="noreferrer"
@@ -218,6 +94,96 @@ function renderAnswerWithSourceLinks(
   }
 
   return parts;
+}
+
+function splitAnswerForDisplay(answer: string): {
+  shortAnswer: string;
+  detailedAnswer: string;
+} {
+  const cleanedAnswer = answer.trim();
+
+  if (!cleanedAnswer) {
+    return {
+      shortAnswer: "",
+      detailedAnswer: "",
+    };
+  }
+
+  if (cleanedAnswer.startsWith("PROMPT_ONLY_MODE")) {
+    return {
+      shortAnswer: cleanedAnswer,
+      detailedAnswer: "",
+    };
+  }
+
+  const paragraphs = cleanedAnswer
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length <= 1) {
+    const sentences = cleanedAnswer.match(/[^.!?]+[.!?]+(?:\s|$)/g);
+
+    if (!sentences || sentences.length <= 1) {
+      return {
+        shortAnswer: cleanedAnswer,
+        detailedAnswer: "",
+      };
+    }
+
+    return {
+      shortAnswer: sentences[0].trim(),
+      detailedAnswer: cleanedAnswer.slice(sentences[0].length).trim(),
+    };
+  }
+
+  return {
+    shortAnswer: paragraphs[0],
+    detailedAnswer: paragraphs.slice(1).join("\n\n"),
+  };
+}
+
+function AnswerDisplay({ result }: { result: AskResponse }) {
+  const { shortAnswer, detailedAnswer } = useMemo(
+    () => splitAnswerForDisplay(result.answer),
+    [result.answer],
+  );
+
+  const isPromptOnlyMode = result.answer.startsWith("PROMPT_ONLY_MODE");
+
+  if (isPromptOnlyMode) {
+    return (
+      <div className="answerText">
+        {renderAnswerWithSourceLinks(result.answer, result.sources, "prompt")}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {shortAnswer && (
+        <div className="answerText answerTextPrimary">
+          {renderAnswerWithSourceLinks(
+            shortAnswer,
+            result.sources,
+            "short-answer",
+          )}
+        </div>
+      )}
+
+      {detailedAnswer && (
+        <div className="answerText answerTextDetailBeforeGraph">
+          {renderAnswerWithSourceLinks(
+            detailedAnswer,
+            result.sources,
+            "detailed-answer",
+          )}
+        </div>
+      )}
+
+      <LegalReasoningGraph reasoningMap={result.reasoning_map} />
+    </>
+  );
 }
 
 function App() {
@@ -345,12 +311,7 @@ function App() {
                       : "Answer"}
                   </div>
 
-                  <div className="answerText">
-                    {renderAnswerWithSourceLinks(result.answer, result.sources)}
-                  </div>
-
-                  <LegalReasoningGraph sources={result.sources} />
-
+                  <AnswerDisplay result={result} />
                 </div>
               </div>
             )}

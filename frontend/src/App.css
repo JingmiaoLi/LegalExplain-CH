@@ -891,3 +891,216 @@ summary {
     padding: 16px;
   }
 }
+
+/* React Flow legal reasoning map */
+
+.reactFlowCanvas {
+  width: 100%;
+  height: 620px;
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid #dbe3ef;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top left, rgba(219, 234, 254, 0.72), transparent 34%),
+    #f8fafc;
+}
+
+.react-flow__pane {
+  cursor: default;
+}
+
+.react-flow__node-default {
+  width: 320px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.legalFlowNode {
+  border: 1px solid #dbe3ef;
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.legalFlowNodeIssue {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.legalFlowNodeCondition {
+  border-color: #93c5fd;
+}
+
+.legalFlowNodeOutcome {
+  border-color: #bfdbfe;
+}
+
+.legalFlowNodeConsequence {
+  border-color: #ddd6fe;
+}
+
+.legalFlowNodeRelated {
+  border-style: dashed;
+  border-color: #cbd5e1;
+  background: rgba(248, 250, 252, 0.92);
+  box-shadow: none;
+}
+
+.flowNodeContent {
+  padding: 15px 16px;
+}
+
+.flowNodeType {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 9px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  padding: 5px 9px;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.flowNodeContent h3 {
+  margin: 0 0 8px;
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.flowNodeContent p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.flowArticleChip {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 6px 10px;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.flowArticleChip:hover {
+  background: #eff6ff;
+}
+
+.legalFlowEdge path {
+  stroke: #94a3b8;
+  stroke-width: 2.2;
+}
+
+.legalFlowEdgeYes path {
+  stroke: #2563eb;
+}
+
+.legalFlowEdgeNo path {
+  stroke: #7c3aed;
+}
+
+.react-flow__edge-text {
+  font-size: 12px;
+  font-weight: 900;
+  fill: #0f172a;
+}
+
+.react-flow__edge-textbg {
+  fill: #ffffff;
+}
+
+.react-flow__controls {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+}
+
+.react-flow__controls-button {
+  border-bottom: 1px solid #e2e8f0;
+  background: white;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .reactFlowCanvas {
+    height: 680px;
+  }
+}
+
+.appRoot {
+  width: 100%;
+}
+
+.workspace,
+.singleColumnWorkspace,
+.conversationPanel {
+  width: 100%;
+}
+
+.singleColumnWorkspace {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.conversationPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.messageRow {
+  width: 100%;
+}
+
+.assistantRow {
+  align-items: flex-start;
+}
+
+.assistantBubble {
+  width: min(92vw, 1080px);
+  max-width: 1080px;
+}
+
+.userBubble {
+  max-width: min(78vw, 760px);
+}
+
+.answerText {
+  max-width: 780px;
+  line-height: 1.75;
+}
+
+.composerInner {
+  width: min(92vw, 1080px);
+  max-width: 1080px;
+}
+
+.answerTextPrimary {
+  margin-bottom: 16px;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.answerTextDetailBeforeGraph {
+  margin-top: 0;
+  margin-bottom: 24px;
+  line-height: 1.75;
+}

@@ -19,8 +19,32 @@ export interface SourceItem {
   metadata: Record<string, unknown>;
 }
 
+export interface ReasoningNode {
+  id: string;
+  node_type: string;
+  label: string;
+  description: string;
+  article_label: string | null;
+  article_number: string | null;
+  source_url: string | null;
+}
+
+export interface ReasoningEdge {
+  source: string;
+  target: string;
+  label: string | null;
+}
+
+export interface ReasoningMap {
+  title: string;
+  summary: string;
+  nodes: ReasoningNode[];
+  edges: ReasoningEdge[];
+}
+
 export interface AskResponse {
   answer: string;
+  reasoning_map: ReasoningMap | null;
   sources: SourceItem[];
   debug_info: Record<string, unknown>;
 }
