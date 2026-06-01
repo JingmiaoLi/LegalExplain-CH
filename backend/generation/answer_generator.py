@@ -98,7 +98,7 @@ class AnswerGenerationConfig:
     llm_mode: str = "prompt_only"
     model_name: str = "gpt-4o-mini"
     temperature: float = 0.0
-    max_tokens: int = 800
+    max_tokens: int = 1600
 
     enable_query_rewrite: bool = True
     enable_reasoning_map: bool = True
@@ -107,7 +107,7 @@ class AnswerGenerationConfig:
     text_map_generation_mode: str = "separate"
 
     query_rewrite_max_tokens: int = 160
-    reasoning_map_max_tokens: int = 450
+    reasoning_map_max_tokens: int = 900
 
     query_rewrite_timeout_seconds: int = 20
     reasoning_map_timeout_seconds: int = 30
@@ -566,6 +566,39 @@ class AnswerGenerator:
             f"{reasoning_map_section}"
         )
 
+    def _uses_max_completion_tokens(self, model_name: str) -> bool:
+        """
+        Some OpenAI reasoning/newer chat models reject max_tokens and require
+        max_completion_tokens instead. Most local OpenAI-compatible servers such
+        as Ollama still expect max_tokens.
+        """
+        normalized_model = model_name.lower()
+
+        return normalized_model.startswith(
+            (
+                "gpt-5",
+                "o1",
+                "o3",
+                "o4",
+            )
+        )
+
+    def _supports_custom_temperature(self, model_name: str) -> bool:
+        """
+        Some newer OpenAI models only support the default temperature.
+        For those models, do not send the temperature field at all.
+        """
+        normalized_model = model_name.lower()
+
+        return not normalized_model.startswith(
+            (
+                "gpt-5",
+                "o1",
+                "o3",
+                "o4",
+            )
+        )
+
     def _call_openai_compatible_chat_completion(
         self,
         prompt: str,
@@ -584,6 +617,10 @@ class AnswerGenerator:
 
         url = f"{base_url}/chat/completions"
 
+        token_limit = max_tokens or self.config.max_tokens
+
+        uses_max_completion_tokens = self._uses_max_completion_tokens(model_name)
+
         payload = {
             "model": model_name,
             "messages": [
@@ -596,9 +633,16 @@ class AnswerGenerator:
                     "content": prompt,
                 },
             ],
-            "temperature": self.config.temperature,
-            "max_tokens": max_tokens or self.config.max_tokens,
         }
+
+        if uses_max_completion_tokens:
+            payload["max_completion_tokens"] = token_limit
+        else:
+            payload["max_tokens"] = token_limit
+
+        if self._supports_custom_temperature(model_name):
+            payload["temperature"] = self.config.temperature
+
 
         request = urllib.request.Request(
             url=url,
@@ -703,6 +747,9 @@ class AnswerGenerator:
 
         if not isinstance(parsed, dict):
             return None
+
+        if "reasoning_map" in parsed and isinstance(parsed["reasoning_map"], dict):
+            parsed = parsed["reasoning_map"]
 
         nodes = parsed.get("nodes")
         edges = parsed.get("edges")
@@ -852,21 +899,32 @@ class AnswerGenerator:
         """
         Extract the first likely JSON object from an LLM response.
 
-        This is a fallback in case the model accidentally wraps JSON in text or
-        markdown despite the prompt asking for JSON only.
+        Handles raw JSON, fenced JSON, and responses with extra text around JSON.
         """
-        fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        cleaned_text = text.strip()
+
+        fenced_match = re.search(
+            r"```(?:json)?\s*(.*?)\s*```",
+            cleaned_text,
+            re.DOTALL,
+        )
 
         if fenced_match:
-            return fenced_match.group(1)
+            fenced_content = fenced_match.group(1).strip()
+            start = fenced_content.find("{")
+            end = fenced_content.rfind("}")
 
-        start = text.find("{")
-        end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                return fenced_content[start : end + 1]
+
+        start = cleaned_text.find("{")
+        end = cleaned_text.rfind("}")
 
         if start == -1 or end == -1 or end <= start:
             return None
 
-        return text[start : end + 1]
+        return cleaned_text[start : end + 1]
+
 
     def _to_snake_case(self, value: str) -> str:
         cleaned = value.strip()

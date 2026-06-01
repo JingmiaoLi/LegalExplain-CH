@@ -277,6 +277,10 @@ function App() {
         enable_reasoning_map: displayMode !== "text_only",
       });
 
+      console.log("response_mode sent", displayMode);
+      console.log("debug_info", response.debug_info);
+      console.log("reasoning_map", response.reasoning_map);
+
       const userMessage: ConversationMessage = {
         id: createMessageId(),
         role: "user",
