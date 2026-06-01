@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
 import json
 import os
 import re
+import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -13,10 +15,13 @@ from dotenv import load_dotenv
 from backend.generation.prompts import (
     SYSTEM_PROMPT,
     build_answer_prompt,
+    build_query_rewrite_prompt,
+    build_combined_answer_map_prompt,
     build_reasoning_map_prompt,
 )
 from backend.retrieval.hybrid_retriever import HybridRetriever
 from backend.retrieval.schemas import RetrievalConfig, RetrievalResponse
+
 
 KNOWN_NODE_TYPES = {
     "issue",
@@ -50,6 +55,14 @@ NODE_TYPE_ALIASES = {
     "responsibility": "duty",
 }
 
+KNOWN_MAP_TYPES = {
+    "decision",
+    "overview",
+    "consequence",
+    "duty",
+    "mixed",
+}
+
 
 @dataclass(frozen=True)
 class AnswerGenerationConfig:
@@ -59,6 +72,18 @@ class AnswerGenerationConfig:
     llm_mode:
         - "prompt_only": do not call an LLM; return the built prompt for debugging.
         - "openai_compatible": call an OpenAI-compatible chat completions endpoint.
+
+    Cost / latency controls:
+        - enable_query_rewrite: allow LLM-based follow-up query rewriting.
+        - enable_reasoning_map: allow optional visual reasoning map generation.
+        - query_rewrite_mode:
+            - "auto": rewrite only when the query looks like a follow-up.
+            - "always": rewrite whenever conversation history exists.
+            - "disabled": never rewrite.
+        - reasoning_map_max_tokens: cap output size for map generation.
+        - query_rewrite_timeout_seconds: short timeout for rewrite calls.
+        - reasoning_map_timeout_seconds: short timeout for optional map calls.
+        - request_timeout_seconds: default timeout for the main answer call.
 
     Environment variables used in openai_compatible mode:
         - LLM_API_KEY
@@ -74,7 +99,21 @@ class AnswerGenerationConfig:
     model_name: str = "gpt-4o-mini"
     temperature: float = 0.0
     max_tokens: int = 800
-    request_timeout_seconds: int = 60
+
+    enable_query_rewrite: bool = True
+    enable_reasoning_map: bool = True
+    query_rewrite_mode: str = "auto"
+    response_mode: str = "text_map"
+    text_map_generation_mode: str = "separate"
+
+    query_rewrite_max_tokens: int = 160
+    reasoning_map_max_tokens: int = 450
+
+    query_rewrite_timeout_seconds: int = 20
+    reasoning_map_timeout_seconds: int = 30
+    request_timeout_seconds: int = 120
+
+
 
 
 @dataclass(frozen=True)
@@ -89,6 +128,9 @@ class GeneratedAnswer:
     reasoning_map: dict[str, Any] | None = None
     reasoning_map_prompt: str | None = None
     reasoning_map_raw: str | None = None
+    original_query: str | None = None
+    standalone_query: str | None = None
+    query_rewrite_prompt: str | None = None
 
 
 class AnswerGenerator:
@@ -97,8 +139,10 @@ class AnswerGenerator:
 
     This class deliberately separates retrieval from generation:
     - HybridRetriever retrieves and reranks legal chunks.
-    - AnswerGenerator first asks the LLM for a compact reasoning_map JSON.
-    - AnswerGenerator then uses that reasoning_map to guide the final answer.
+    - AnswerGenerator rewrites follow-up queries only when needed.
+    - AnswerGenerator always prioritizes the text answer.
+    - AnswerGenerator optionally generates a compact reasoning_map.
+    - Reasoning map failure never blocks the main answer.
 
     In prompt_only mode, no external API call is made. This is useful for
     debugging and for portfolio demos where retrieval quality is the focus.
@@ -114,11 +158,16 @@ class AnswerGenerator:
         self.retriever = retriever or HybridRetriever()
         self.config = config or AnswerGenerationConfig()
 
+
     def generate(
         self,
         query: str,
         retrieval_config: RetrievalConfig | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> GeneratedAnswer:
+        started_at = time.perf_counter()
+        timings: dict[str, float] = {}
+
         if retrieval_config is None:
             retrieval_config = RetrievalConfig(
                 top_k=5,
@@ -126,63 +175,189 @@ class AnswerGenerator:
                 enable_reranker=True,
             )
 
-        retrieval_response = self.retriever.retrieve(
+        step_started_at = time.perf_counter()
+
+        (
+            standalone_query,
+            query_rewrite_prompt,
+            query_rewrite_error,
+        ) = self._rewrite_query_for_retrieval(
             query=query,
+            conversation_history=conversation_history,
+        )
+
+        timings["query_rewrite_seconds"] = round(
+            time.perf_counter() - step_started_at,
+            3,
+        )
+
+        step_started_at = time.perf_counter()
+
+        retrieval_response = self.retriever.retrieve(
+            query=standalone_query,
             config=retrieval_config,
         )
 
-        reasoning_map_prompt = build_reasoning_map_prompt(
-            query=query,
-            chunks=retrieval_response.chunks,
+        timings["retrieval_seconds"] = round(
+            time.perf_counter() - step_started_at,
+            3,
         )
 
+        prompt_query = self._build_prompt_query(
+            original_query=query,
+            standalone_query=standalone_query,
+        )
+
+        should_generate_answer = self.config.response_mode in {
+            "text_map",
+            "text_only",
+        }
+
+        should_generate_reasoning_map = (
+            self.config.enable_reasoning_map
+            and self.config.response_mode in {"text_map", "map_only"}
+        )
+
+        use_combined_text_map = (
+            self.config.response_mode == "text_map"
+            and self.config.text_map_generation_mode == "combined"
+            and should_generate_answer
+            and should_generate_reasoning_map
+        )
+
+        prompt = ""
+        reasoning_map_prompt: str | None = None
         reasoning_map_raw: str | None = None
         reasoning_map: dict[str, Any] | None = None
-        reasoning_map_json_for_answer: str | None = None
+        reasoning_map_error: str | None = None
+        answer = ""
 
         if self.config.llm_mode == "prompt_only":
-            prompt = build_answer_prompt(
-                query=query,
-                chunks=retrieval_response.chunks,
-                reasoning_map_json=None,
-            )
+            if use_combined_text_map:
+                prompt = build_combined_answer_map_prompt(
+                    query=prompt_query,
+                    chunks=retrieval_response.chunks,
+                )
+                reasoning_map_prompt = None
+
+            else:
+                if should_generate_answer:
+                    prompt = build_answer_prompt(
+                        query=prompt_query,
+                        chunks=retrieval_response.chunks,
+                        reasoning_map_json=None,
+                    )
+
+                if should_generate_reasoning_map:
+                    reasoning_map_prompt = build_reasoning_map_prompt(
+                        query=prompt_query,
+                        chunks=retrieval_response.chunks,
+                    )
 
             answer = self._build_prompt_only_answer(
-                reasoning_map_prompt=reasoning_map_prompt,
+                query_rewrite_prompt=query_rewrite_prompt,
                 answer_prompt=prompt,
+                reasoning_map_prompt=reasoning_map_prompt,
             )
+
+            timings["answer_generation_seconds"] = 0.0
+            timings["reasoning_map_generation_seconds"] = 0.0
+            timings["combined_generation_seconds"] = 0.0
 
         elif self.config.llm_mode == "openai_compatible":
-            reasoning_map_raw = self._call_openai_compatible_chat_completion(
-                reasoning_map_prompt,
-                max_tokens=700,
-            )
-
-            reasoning_map = self._parse_reasoning_map(reasoning_map_raw)
-
-            if reasoning_map is not None:
-                reasoning_map_json_for_answer = json.dumps(
-                    reasoning_map,
-                    ensure_ascii=False,
-                    indent=2,
+            if use_combined_text_map:
+                prompt = build_combined_answer_map_prompt(
+                    query=prompt_query,
+                    chunks=retrieval_response.chunks,
                 )
 
-            prompt = build_answer_prompt(
-                query=query,
-                chunks=retrieval_response.chunks,
-                reasoning_map_json=reasoning_map_json_for_answer,
-            )
+                step_started_at = time.perf_counter()
 
-            answer = self._call_openai_compatible_chat_completion(
-                prompt,
-                max_tokens=self.config.max_tokens,
-            )
+                try:
+                    combined_raw = self._call_openai_compatible_chat_completion(
+                        prompt,
+                        max_tokens=self.config.max_tokens + self.config.reasoning_map_max_tokens,
+                        timeout_seconds=self.config.request_timeout_seconds,
+                    )
+                    answer, reasoning_map = self._parse_combined_answer_map(
+                        combined_raw
+                    )
+                    reasoning_map_raw = combined_raw
+
+                except RuntimeError as error:
+                    answer = ""
+                    reasoning_map = None
+                    reasoning_map_raw = None
+                    reasoning_map_error = str(error)
+
+                combined_seconds = round(time.perf_counter() - step_started_at, 3)
+                timings["combined_generation_seconds"] = combined_seconds
+                timings["answer_generation_seconds"] = combined_seconds
+                timings["reasoning_map_generation_seconds"] = 0.0
+
+            else:
+                if should_generate_answer:
+                    prompt = build_answer_prompt(
+                        query=prompt_query,
+                        chunks=retrieval_response.chunks,
+                        reasoning_map_json=None,
+                    )
+
+                    step_started_at = time.perf_counter()
+
+                    answer = self._call_openai_compatible_chat_completion(
+                        prompt,
+                        max_tokens=self.config.max_tokens,
+                        timeout_seconds=self.config.request_timeout_seconds,
+                    )
+
+                    timings["answer_generation_seconds"] = round(
+                        time.perf_counter() - step_started_at,
+                        3,
+                    )
+                else:
+                    answer = ""
+                    timings["answer_generation_seconds"] = 0.0
+
+                if should_generate_reasoning_map:
+                    reasoning_map_prompt = build_reasoning_map_prompt(
+                        query=prompt_query,
+                        chunks=retrieval_response.chunks,
+                    )
+
+                    step_started_at = time.perf_counter()
+
+                    try:
+                        reasoning_map_raw = self._call_openai_compatible_chat_completion(
+                            reasoning_map_prompt,
+                            max_tokens=self.config.reasoning_map_max_tokens,
+                            timeout_seconds=self.config.reasoning_map_timeout_seconds,
+                        )
+                        reasoning_map = self._parse_reasoning_map(reasoning_map_raw)
+                    except RuntimeError as error:
+                        reasoning_map_raw = None
+                        reasoning_map = None
+                        reasoning_map_error = str(error)
+
+                    timings["reasoning_map_generation_seconds"] = round(
+                        time.perf_counter() - step_started_at,
+                        3,
+                    )
+                else:
+                    timings["reasoning_map_generation_seconds"] = 0.0
+
+                timings["combined_generation_seconds"] = 0.0
 
         else:
             raise ValueError(
                 "Unsupported llm_mode. Expected 'prompt_only' or "
                 f"'openai_compatible', got: {self.config.llm_mode}"
             )
+
+        timings["total_seconds"] = round(
+            time.perf_counter() - started_at,
+            3,
+        )
 
         return GeneratedAnswer(
             query=query,
@@ -195,31 +370,207 @@ class AnswerGenerator:
                 "retrieval_method": retrieval_response.retrieval_method,
                 "retrieval_debug_info": retrieval_response.debug_info,
                 "source_count": len(retrieval_response.chunks),
+                "response_mode": self.config.response_mode,
+                "text_map_generation_mode": self.config.text_map_generation_mode,
+                "answer_generated": should_generate_answer,
+                "original_query": query,
+                "standalone_query": standalone_query,
+                "query_rewritten": standalone_query != query,
+                "query_rewrite_enabled": self.config.enable_query_rewrite,
+                "query_rewrite_mode": self.config.query_rewrite_mode,
+                "query_rewrite_error": query_rewrite_error,
+                "conversation_turn_count": len(conversation_history or []),
+                "reasoning_map_enabled": should_generate_reasoning_map,
                 "reasoning_map_parse_success": reasoning_map is not None,
+                "reasoning_map_error": reasoning_map_error,
+                "timings": timings,
             },
             reasoning_map=reasoning_map,
             reasoning_map_prompt=reasoning_map_prompt,
             reasoning_map_raw=reasoning_map_raw,
+            original_query=query,
+            standalone_query=standalone_query,
+            query_rewrite_prompt=query_rewrite_prompt,
         )
+
+
+    def _build_prompt_query(
+        self,
+        original_query: str,
+        standalone_query: str,
+    ) -> str:
+        """
+        Keep the user's original question visible to the answer prompt, while
+        adding the standalone retrieval query only when it adds context.
+        """
+        if standalone_query == original_query:
+            return original_query
+
+        return (
+            f"{original_query}\n\n"
+            f"Standalone retrieval query for context:\n{standalone_query}"
+        )
+
+    def _rewrite_query_for_retrieval(
+        self,
+        query: str,
+        conversation_history: list[dict[str, str]] | None,
+    ) -> tuple[str, str | None, str | None]:
+        """
+        Rewrite a follow-up question into a standalone retrieval query.
+
+        To control cost, this only calls the LLM when:
+        - query rewriting is enabled,
+        - there is conversation history,
+        - llm_mode is openai_compatible,
+        - and the query looks like a follow-up unless mode is "always".
+        """
+        query_rewrite_prompt: str | None = None
+
+        if not self.config.enable_query_rewrite:
+            return query, None, None
+
+        if self.config.query_rewrite_mode == "disabled":
+            return query, None, None
+
+        if not conversation_history:
+            return query, None, None
+
+        query_rewrite_prompt = build_query_rewrite_prompt(
+            query=query,
+            conversation_history=conversation_history,
+        )
+
+        if self.config.llm_mode != "openai_compatible":
+            return query, query_rewrite_prompt, None
+
+        should_rewrite = (
+            self.config.query_rewrite_mode == "always"
+            or self._looks_like_follow_up(query)
+        )
+
+        if not should_rewrite:
+            return query, query_rewrite_prompt, None
+
+        try:
+            rewritten_query = self._call_openai_compatible_chat_completion(
+                query_rewrite_prompt,
+                max_tokens=self.config.query_rewrite_max_tokens,
+                timeout_seconds=self.config.query_rewrite_timeout_seconds,
+            ).strip()
+
+        except RuntimeError as error:
+            return query, query_rewrite_prompt, str(error)
+
+        rewritten_query = rewritten_query.strip().strip('"').strip("'")
+
+        if not rewritten_query:
+            return query, query_rewrite_prompt, None
+
+        if len(rewritten_query) > 500:
+            rewritten_query = rewritten_query[:500].strip()
+
+        return rewritten_query, query_rewrite_prompt, None
+
+    def _looks_like_follow_up(self, query: str) -> bool:
+        """
+        Cheap heuristic to avoid unnecessary LLM rewrite calls.
+
+        This intentionally errs toward not rewriting standalone legal questions,
+        because unnecessary rewrite calls increase cost and latency.
+        """
+        lowered = query.strip().lower()
+
+        if not lowered:
+            return False
+
+        follow_up_markers = {
+            "what if",
+            "what about",
+            "and if",
+            "then",
+            "in that case",
+            "same situation",
+            "same case",
+            "that",
+            "this",
+            "they",
+            "them",
+            "it",
+            "he",
+            "she",
+            "their",
+            "those",
+            "there",
+        }
+
+        if any(marker in lowered for marker in follow_up_markers):
+            return True
+
+        words = lowered.split()
+
+        legal_context_keywords = {
+            "employer",
+            "employee",
+            "salary",
+            "dismiss",
+            "dismissal",
+            "terminate",
+            "termination",
+            "notice",
+            "contract",
+            "overtime",
+            "vacation",
+            "illness",
+            "sick",
+            "damages",
+            "compensation",
+            "swiss",
+            "employment",
+            "law",
+        }
+
+        has_legal_context = any(keyword in lowered for keyword in legal_context_keywords)
+
+        if len(words) <= 7 and not has_legal_context:
+            return True
+
+        return False
 
     def _build_prompt_only_answer(
         self,
-        reasoning_map_prompt: str,
+        query_rewrite_prompt: str | None,
         answer_prompt: str,
+        reasoning_map_prompt: str | None,
     ) -> str:
+        query_rewrite_section = (
+            "=== QUERY REWRITE PROMPT ===\n\n"
+            f"{query_rewrite_prompt}\n\n"
+            if query_rewrite_prompt
+            else ""
+        )
+
+        reasoning_map_section = (
+            "=== REASONING MAP PROMPT ===\n\n"
+            f"{reasoning_map_prompt}\n\n"
+            if reasoning_map_prompt
+            else ""
+        )
+
         return (
             "PROMPT_ONLY_MODE\n\n"
             "No LLM call was made. The grounded prompts are shown below.\n\n"
-            "=== REASONING MAP PROMPT ===\n\n"
-            f"{reasoning_map_prompt}\n\n"
+            f"{query_rewrite_section}"
             "=== ANSWER PROMPT ===\n\n"
-            f"{answer_prompt}"
+            f"{answer_prompt}\n\n"
+            f"{reasoning_map_section}"
         )
 
     def _call_openai_compatible_chat_completion(
         self,
         prompt: str,
         max_tokens: int | None = None,
+        timeout_seconds: int | None = None,
     ) -> str:
         api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
@@ -262,7 +613,7 @@ class AnswerGenerator:
         try:
             with urllib.request.urlopen(
                 request,
-                timeout=self.config.request_timeout_seconds,
+                timeout=timeout_seconds or self.config.request_timeout_seconds,
             ) as response:
                 response_body = response.read().decode("utf-8")
 
@@ -272,12 +623,13 @@ class AnswerGenerator:
                 f"LLM request failed with status {error.code}: {error_body}"
             ) from error
 
-        except urllib.error.URLError as error:
-            raise RuntimeError(f"LLM request failed: {error}") from error
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+            raise RuntimeError(f"LLM request failed or timed out: {error}") from error
 
         data = json.loads(response_body)
 
         choices = data.get("choices", [])
+
         if not choices:
             raise RuntimeError(f"LLM response did not contain choices: {data}")
 
@@ -288,7 +640,47 @@ class AnswerGenerator:
             raise RuntimeError(f"LLM response did not contain content: {data}")
 
         return str(content).strip()
+    
+    
+    def _parse_combined_answer_map(
+        self,
+        raw_content: str,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """
+        Parse a combined JSON response containing both answer and reasoning_map.
 
+        If the JSON is malformed, treat the raw response as answer text and return
+        no reasoning map. This prevents the UI from failing completely.
+        """
+        try:
+            parsed = json.loads(raw_content)
+        except json.JSONDecodeError:
+            extracted_json = self._extract_json_object(raw_content)
+
+            if extracted_json is None:
+                return raw_content.strip(), None
+
+            try:
+                parsed = json.loads(extracted_json)
+            except json.JSONDecodeError:
+                return raw_content.strip(), None
+
+        if not isinstance(parsed, dict):
+            return raw_content.strip(), None
+
+        answer = parsed.get("answer")
+        if not isinstance(answer, str):
+            answer = ""
+
+        raw_reasoning_map = parsed.get("reasoning_map")
+        reasoning_map: dict[str, Any] | None = None
+
+        if isinstance(raw_reasoning_map, dict):
+            reasoning_map = self._parse_reasoning_map(
+                json.dumps(raw_reasoning_map, ensure_ascii=False)
+            )
+
+        return answer.strip(), reasoning_map
     def _parse_reasoning_map(self, raw_content: str) -> dict[str, Any] | None:
         """
         Parse and lightly validate the reasoning_map JSON returned by the LLM.
@@ -348,7 +740,7 @@ class AnswerGenerator:
 
             if node_type not in KNOWN_NODE_TYPES:
                 node_type = "related"
-                
+
             if node_id in node_ids:
                 node_id = f"{node_id}_{index + 1}"
 
@@ -365,6 +757,10 @@ class AnswerGenerator:
                     ),
                     "article_label": self._safe_optional_string(
                         node.get("article_label"),
+                        default=None,
+                    ),
+                    "article_number": self._safe_optional_string(
+                        node.get("article_number"),
                         default=None,
                     ),
                     "source_url": self._safe_optional_string(
@@ -398,6 +794,7 @@ class AnswerGenerator:
                 continue
 
             normalized_label: str | None = None
+
             if isinstance(label, str) and label.strip():
                 clean_label = label.strip()
 
@@ -426,11 +823,26 @@ class AnswerGenerator:
                     }
                 )
 
+        title = parsed.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = "Legal reasoning map"
+
+        map_type = parsed.get("map_type")
+        if not isinstance(map_type, str) or not map_type.strip():
+            map_type = "mixed"
+
+        map_type = map_type.strip().lower()
+
+        if map_type not in KNOWN_MAP_TYPES:
+            map_type = "mixed"
+
         summary = parsed.get("summary")
         if not isinstance(summary, str) or not summary.strip():
             summary = "Legal reasoning map."
 
         return {
+            "title": title.strip(),
+            "map_type": map_type,
             "summary": summary.strip(),
             "nodes": normalized_nodes,
             "edges": normalized_edges,

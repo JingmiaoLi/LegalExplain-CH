@@ -1,11 +1,22 @@
 export type LlmMode = "prompt_only" | "openai_compatible";
 
+export type ResponseMode = "text_map" | "text_only" | "map_only";
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export interface AskRequest {
   query: string;
+  conversation_history?: ChatMessage[];
+  response_mode?: ResponseMode;
   llm_mode: LlmMode;
   top_k: number;
   candidate_k: number;
   enable_reranker: boolean;
+  enable_query_rewrite?: boolean;
+  enable_reasoning_map?: boolean;
 }
 
 export interface SourceItem {
@@ -37,6 +48,7 @@ export interface ReasoningEdge {
 
 export interface ReasoningMap {
   title: string;
+  map_type: string;
   summary: string;
   nodes: ReasoningNode[];
   edges: ReasoningEdge[];

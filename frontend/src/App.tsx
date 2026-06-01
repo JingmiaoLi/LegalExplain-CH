@@ -2,7 +2,12 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { askLawRag } from "./api";
-import type { AskResponse, LlmMode, SourceItem } from "./api";
+import type {
+  AskResponse,
+  ChatMessage,
+  LlmMode,
+  SourceItem,
+} from "./api";
 
 import { LegalReasoningGraph } from "./components/legal_reasoning_graph/legal_reasoning_graph";
 
@@ -14,6 +19,25 @@ const exampleQuestions = [
   "What does Swiss employment law say about salary payment?",
   "What are the employee's duties of loyalty and care?",
 ];
+
+type DisplayMode = "text_map" | "text_only" | "map_only";
+
+type ConversationMessage =
+  | {
+      id: string;
+      role: "user";
+      content: string;
+    }
+  | {
+      id: string;
+      role: "assistant";
+      content: string;
+      result: AskResponse;
+    };
+
+function createMessageId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function getSourceUrl(source: SourceItem): string | null {
   const sourceUrl = source.metadata?.source_url;
@@ -143,21 +167,11 @@ function splitAnswerForDisplay(answer: string): {
   };
 }
 
-function AnswerDisplay({ result }: { result: AskResponse }) {
+function AnswerText({ result }: { result: AskResponse }) {
   const { shortAnswer, detailedAnswer } = useMemo(
     () => splitAnswerForDisplay(result.answer),
     [result.answer],
   );
-
-  const isPromptOnlyMode = result.answer.startsWith("PROMPT_ONLY_MODE");
-
-  if (isPromptOnlyMode) {
-    return (
-      <div className="answerText">
-        {renderAnswerWithSourceLinks(result.answer, result.sources, "prompt")}
-      </div>
-    );
-  }
 
   return (
     <>
@@ -180,7 +194,38 @@ function AnswerDisplay({ result }: { result: AskResponse }) {
           )}
         </div>
       )}
+    </>
+  );
+}
 
+function AnswerDisplay({
+  result,
+  displayMode,
+}: {
+  result: AskResponse;
+  displayMode: DisplayMode;
+}) {
+  const isPromptOnlyMode = result.answer.startsWith("PROMPT_ONLY_MODE");
+
+  if (isPromptOnlyMode) {
+    return (
+      <div className="answerText">
+        {renderAnswerWithSourceLinks(result.answer, result.sources, "prompt")}
+      </div>
+    );
+  }
+
+  if (displayMode === "text_only") {
+    return <AnswerText result={result} />;
+  }
+
+  if (displayMode === "map_only") {
+    return <LegalReasoningGraph reasoningMap={result.reasoning_map} />;
+  }
+
+  return (
+    <>
+      <AnswerText result={result} />
       <LegalReasoningGraph reasoningMap={result.reasoning_map} />
     </>
   );
@@ -188,13 +233,21 @@ function AnswerDisplay({ result }: { result: AskResponse }) {
 
 function App() {
   const [query, setQuery] = useState(exampleQuestions[0]);
-  const [submittedQuery, setSubmittedQuery] = useState("");
   const [llmMode, setLlmMode] = useState<LlmMode>("openai_compatible");
-  const [result, setResult] = useState<AskResponse | null>(null);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>("text_only");
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [conversationHistory, setConversationHistory] = useState<ChatMessage[]>(
+    [],
+  );
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(
+    null,
+  );
 
-  const hasConversation = Boolean(submittedQuery || isLoading || result || error);
+  const hasConversation = Boolean(
+    messages.length > 0 || pendingUserMessage || isLoading || error,
+  );
 
   async function handleAsk() {
     const cleanedQuery = query.trim();
@@ -204,21 +257,56 @@ function App() {
       return;
     }
 
+    const historyForRequest = conversationHistory;
+
     setIsLoading(true);
     setError("");
-    setResult(null);
-    setSubmittedQuery(cleanedQuery);
+    setPendingUserMessage(cleanedQuery);
+    setQuery("");
 
     try {
       const response = await askLawRag({
         query: cleanedQuery,
+        conversation_history: historyForRequest,
+        response_mode: displayMode,
         llm_mode: llmMode,
         top_k: 5,
         candidate_k: 20,
         enable_reranker: true,
+        enable_query_rewrite: true,
+        enable_reasoning_map: displayMode !== "text_only",
       });
 
-      setResult(response);
+      const userMessage: ConversationMessage = {
+        id: createMessageId(),
+        role: "user",
+        content: cleanedQuery,
+      };
+
+      const assistantMessage: ConversationMessage = {
+        id: createMessageId(),
+        role: "assistant",
+        content: response.answer,
+        result: response,
+      };
+
+      setMessages((previousMessages) => [
+        ...previousMessages,
+        userMessage,
+        assistantMessage,
+      ]);
+
+      setConversationHistory((previousHistory) => [
+        ...previousHistory,
+        {
+          role: "user",
+          content: cleanedQuery,
+        },
+        {
+          role: "assistant",
+          content: response.answer,
+        },
+      ]);
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -227,11 +315,20 @@ function App() {
       );
     } finally {
       setIsLoading(false);
+      setPendingUserMessage(null);
     }
   }
 
   function handleExampleClick(example: string) {
     setQuery(example);
+  }
+
+  function handleClearConversation() {
+    setMessages([]);
+    setConversationHistory([]);
+    setPendingUserMessage(null);
+    setError("");
+    setQuery(exampleQuestions[0]);
   }
 
   return (
@@ -243,6 +340,32 @@ function App() {
         </div>
 
         <div className="topBarMeta">
+          {hasConversation && (
+            <button
+              type="button"
+              className="clearConversationButton"
+              onClick={handleClearConversation}
+              disabled={isLoading}
+            >
+              New chat
+            </button>
+          )}
+
+          <label className="modeSelectLabel">
+            View
+            <select
+              value={displayMode}
+              onChange={(event) =>
+                setDisplayMode(event.target.value as DisplayMode)
+              }
+              className="modeSelect"
+            >
+              <option value="text_map">Text + map</option>
+              <option value="text_only">Text only</option>
+              <option value="map_only">Map only</option>
+            </select>
+          </label>
+
           <label className="modeSelectLabel">
             Mode
             <select
@@ -284,10 +407,41 @@ function App() {
       {hasConversation && (
         <section className="workspace singleColumnWorkspace">
           <section className="conversationPanel">
-            {submittedQuery && (
+            {messages.map((message) => {
+              if (message.role === "user") {
+                return (
+                  <div key={message.id} className="messageRow userRow">
+                    <div className="avatar userAvatar">You</div>
+                    <div className="messageBubble userBubble">
+                      {message.content}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div key={message.id} className="messageRow assistantRow">
+                  <div className="avatar assistantAvatar">AI</div>
+                  <div className="messageBubble assistantBubble">
+                    {message.result.answer.startsWith("PROMPT_ONLY_MODE") && (
+                      <div className="messageHeader">Grounded prompt preview</div>
+                    )}
+
+                    <AnswerDisplay
+                      result={message.result}
+                      displayMode={displayMode}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+
+            {pendingUserMessage && (
               <div className="messageRow userRow">
                 <div className="avatar userAvatar">You</div>
-                <div className="messageBubble userBubble">{submittedQuery}</div>
+                <div className="messageBubble userBubble">
+                  {pendingUserMessage}
+                </div>
               </div>
             )}
 
@@ -297,21 +451,6 @@ function App() {
                 <div className="messageBubble assistantBubble loadingBubble">
                   <span className="loadingDot" />
                   Searching legal sources and preparing an answer...
-                </div>
-              </div>
-            )}
-
-            {result && (
-              <div className="messageRow assistantRow">
-                <div className="avatar assistantAvatar">AI</div>
-                <div className="messageBubble assistantBubble">
-                  <div className="messageHeader">
-                    {result.answer.startsWith("PROMPT_ONLY_MODE")
-                      ? "Grounded prompt preview"
-                      : "Answer"}
-                  </div>
-
-                  <AnswerDisplay result={result} />
                 </div>
               </div>
             )}

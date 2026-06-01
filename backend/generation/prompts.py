@@ -20,15 +20,10 @@ Important boundaries:
 
 def format_source_block(chunks: list[RetrievedChunk]) -> str:
     """
-    Convert retrieved chunks into a compact source context for the LLM.
+    Convert retrieved chunks into a source context for answer generation.
 
-    The source block is intentionally explicit:
-    - source label
-    - article number
-    - title path
-    - text
-
-    This makes the generated answer easier to ground and audit.
+    This version is intentionally richer than the reasoning-map source block,
+    because the final answer needs enough legal detail to remain grounded.
     """
     source_blocks: list[str] = []
 
@@ -52,145 +47,183 @@ def format_source_block(chunks: list[RetrievedChunk]) -> str:
 
     return "\n\n".join(source_blocks)
 
+
+def format_compact_source_block(
+    chunks: list[RetrievedChunk],
+    max_sources: int = 3,
+    max_chars_per_source: int = 700,
+) -> str:
+    """
+    Convert retrieved chunks into a compact source context for graph generation.
+
+    Reasoning maps only need the central legal points, not the full article text.
+    Keeping this compact reduces latency and API cost.
+    """
+    source_blocks: list[str] = []
+
+    for index, chunk in enumerate(chunks[:max_sources], start=1):
+        title_path = str(chunk.title_path or "")
+        article_number = str(chunk.article_number or "")
+        source_label = str(chunk.source_label or "")
+        text = chunk.text.strip()
+
+        if len(text) > max_chars_per_source:
+            text = f"{text[:max_chars_per_source]}..."
+
+        source_blocks.append(
+            "\n".join(
+                [
+                    f"[Source {index}]",
+                    f"source_label: {source_label}",
+                    f"article_number: {article_number}",
+                    f"title_path: {title_path}",
+                    "text_excerpt:",
+                    text,
+                ]
+            )
+        )
+
+    return "\n\n".join(source_blocks)
+
+
+def format_conversation_history(
+    conversation_history: list[dict[str, str]] | None,
+    max_turns: int = 4,
+    max_chars_per_message: int = 700,
+) -> str:
+    """
+    Format recent conversation history for query rewriting.
+
+    Query rewriting only needs recent context, so this is intentionally compact.
+    """
+    if not conversation_history:
+        return "No previous conversation."
+
+    recent_messages = conversation_history[-max_turns:]
+    lines: list[str] = []
+
+    for message in recent_messages:
+        role = message.get("role", "unknown")
+        content = message.get("content", "").strip()
+
+        if not content:
+            continue
+
+        if len(content) > max_chars_per_message:
+            content = f"{content[:max_chars_per_message]}..."
+
+        lines.append(f"{role}: {content}")
+
+    return "\n".join(lines) if lines else "No previous conversation."
+
+
+def build_query_rewrite_prompt(
+    query: str,
+    conversation_history: list[dict[str, str]] | None,
+) -> str:
+    """
+    Build a compact prompt that rewrites a follow-up question into a standalone
+    retrieval query.
+
+    This prompt is only used when the backend heuristic thinks the current query
+    is likely to be a follow-up.
+    """
+    history_context = format_conversation_history(conversation_history)
+
+    return f"""
+Conversation history:
+{history_context}
+
+Current user question:
+{query}
+
+Rewrite the current question into one standalone search query for Swiss employment-law retrieval.
+
+Rules:
+- Return only the rewritten query.
+- Do not include explanations, markdown, quotes, or labels.
+- Preserve the legal actor and action.
+- Do not add facts not provided by the user.
+- Add only the minimum context needed from the conversation.
+- If the question is already standalone, return it unchanged or only lightly clarified.
+- Keep it concise.
+
+Examples:
+Previous topic: employer immediate dismissal.
+Current question: What if I was late twice?
+Rewritten query: Can an employer dismiss an employee immediately without notice for being late twice under Swiss employment law?
+
+Previous topic: employee immediate resignation.
+Current question: What if they stopped paying me?
+Rewritten query: Can an employee terminate an employment contract immediately without notice if the employer stopped paying salary under Swiss employment law?
+
+Return only the rewritten query.
+""".strip()
+
+
 def build_reasoning_map_prompt(
     query: str,
     chunks: list[RetrievedChunk],
 ) -> str:
     """
-    Build a prompt for generating a compact legal reasoning map as JSON.
+    Build a compact prompt for generating a legal reasoning map as JSON.
 
-    The reasoning map is intended for frontend visualization. The model should
-    first choose the most suitable map type, then generate a compact graph.
+    This prompt uses compact source context to reduce LLM cost and latency.
     """
-    source_context = format_source_block(chunks)
+    source_context = format_compact_source_block(chunks)
 
     return f"""
 User question:
 {query}
 
-Retrieved legal sources:
+Compact legal sources:
 {source_context}
 
 Task:
-Create a compact legal reasoning map as JSON.
+Create a compact legal reasoning map as valid JSON.
 
-The map should help a non-lawyer understand the legal structure behind the answer.
-Use only the retrieved legal sources.
+The map should help a non-lawyer see the legal structure behind the answer.
+Use only the compact legal sources.
 
-Return only valid JSON.
-Do not include markdown.
-Do not include explanations outside the JSON.
+Return only valid JSON. Do not include markdown or explanations outside JSON.
 
-Core legal-grounding rules:
-- Do not invent legal rules, article numbers, procedures, cases, remedies, deadlines, or exceptions.
-- Do not mention article numbers that are not included in the retrieved sources.
-- Use article_label only when the article is clearly supported by the retrieved sources.
+Grounding rules:
+- Do not invent legal rules, article numbers, remedies, deadlines, exceptions, or procedures.
+- Use article_label only when clearly supported by the sources.
 - If no article clearly supports a node, use null for article_label.
-- Use null for source_url unless the source URL is explicitly available in the retrieved source metadata.
+- Use null for source_url unless explicitly available.
 - Preserve the legal actor in the user's question.
-- If the user asks whether an employer may do something, the map must describe the employer's power, duty, or liability.
-- If the user asks whether an employee may do something, the map must describe the employee's right, duty, or risk.
-- Never reverse the legal perspective.
+- Never reverse employer and employee roles.
 
-Graph pattern selection:
-First decide which type of legal explanation best fits the user's question.
-Choose the graph structure that makes the legal reasoning easiest for a non-lawyer to understand.
+Choose one map_type:
+- decision: whether someone can, may, must, is allowed to, or is entitled to do something.
+- overview: general rules about a topic.
+- consequence: what happens if something occurs, what liability follows, or what can be claimed.
+- duty: what an employer or employee must do.
+- mixed: only when the question clearly combines more than one type.
 
-Available map_type values:
-- decision
-- overview
-- consequence
-- duty
-- mixed
+Recommended structures:
+- decision: issue -> condition -> test -> yes outcome / no consequence
+- overview: issue -> main rule -> variation / exception -> special case -> related consequence
+- consequence: triggering event -> legal consequence -> remedy or claim -> limitation
+- duty: legal relationship -> main duty -> specific duty -> limit or consequence
+- mixed: issue -> key rule -> related rule -> consequence or next step
 
-Choose only one map_type.
-
-Use "decision" when the user asks whether someone can, may, must, is allowed to, or is entitled to do something.
-Examples:
-- "Can my employer dismiss me immediately without notice?"
-- "Can I leave my job immediately without notice?"
-Recommended structure:
-issue -> condition -> test -> yes outcome / no consequence
-
-Use "overview" when the user asks for general rules about a topic.
-Examples:
-- "What does Swiss employment law say about salary payment?"
-- "What are the rules for overtime?"
-Recommended structure:
-issue -> main rule -> variation / exception -> special case -> related consequence
-
-Use "consequence" when the user asks what happens if something occurs, what liability follows, or what can be claimed.
-Examples:
-- "What happens if my employer dismisses me without good cause?"
-- "What happens if I leave without good cause?"
-Recommended structure:
-triggering event -> legal consequence -> remedy or claim -> limitation or calculation
-
-Use "duty" when the user asks what an employer or employee must do.
-Examples:
-- "What are the employee's duties of loyalty and care?"
-- "What must the employer provide?"
-Recommended structure:
-legal relationship -> main duty -> specific duty -> limit or consequence
-
-Use "mixed" only when the question clearly combines more than one of the above.
-Recommended structure:
-issue -> key rule -> related rule -> consequence or next step
-
-Graph design rules:
-- Do not repeat the user's question as a node.
-- Use 3 to 6 nodes. Prefer 4 or 5 nodes.
-- Keep each node label short, concrete, and user-friendly.
-- A node label should usually be under 8 words.
+Graph rules:
+- Use 3 to 6 nodes. Prefer 4 or 5.
+- Keep labels short, concrete, and user-friendly.
 - Use plain English.
-- Avoid long explanations inside nodes.
-- Use description as an empty string unless a very short clarification is truly necessary.
-- The graph should simplify the legal structure, not summarize every sentence of the answer.
-- Do not force every question into a decision graph.
-- Do not create Yes/No branches for separate legal points that are not true alternatives.
-- Use Yes/No branches only when the question truly requires a condition-based legal assessment.
+- Do not repeat the user's question as a node.
+- Use description as an empty string unless a very short clarification is necessary.
+- Do not use generic role names as labels.
+- Bad labels: "How to decide", "Condition", "Outcome", "Legal issue", "Rule".
+- Good labels: "Good cause is required", "Paid at month end", "Compensation may be owed".
+- Do not force overview, consequence, duty, or mixed questions into Yes/No branches.
+- Use Yes/No branches only when there is a true condition-based legal assessment.
 - Use node_type "test" only when there is a real legal standard to evaluate.
-- For overview, consequence, duty, and mixed maps, prefer a simple left-to-right path without Yes/No labels.
-
-Important distinction between node_type and label:
-- node_type describes the role of the node.
-- label describes the actual legal content.
-- Never use a generic role name as the node label.
-- Bad labels: "How to decide", "Condition", "Outcome", "Consequence", "Legal issue", "Rule".
-- Good labels: "Good cause is required", "Staying must be unreasonable", "Compensation may be owed", "Salary paid monthly".
 
 Allowed node_type values:
-- issue
-- rule
-- condition
-- test
-- outcome
-- consequence
-- exception
-- limitation
-- duty
-- related
-
-Node type guidance:
-- Use "issue" for the legal topic or legal category.
-- Use "rule" for the main legal rule in an overview map.
-- Use "condition" for a requirement that must be satisfied.
-- Use "test" only for how to decide whether a condition is met.
-- Use "outcome" for a possible positive result, right, or entitlement.
-- Use "consequence" for a risk, duty, loss, liability, or negative result.
-- Use "exception" for an exception or special variation.
-- Use "limitation" for a cap, limit, deadline, or restriction.
-- Use "duty" for an employer or employee obligation.
-- Use "related" only for an extra legal point that does not fit the main path.
-
-Decision-branch rules:
-- If the legal answer depends on a yes/no condition, create a branch.
-- The condition should appear before the branch, not inside the Yes or No outcome.
-- The Yes branch should state the result if the condition is satisfied.
-- The No branch should state the consequence or risk if the condition is not satisfied.
-- Do not put a requirement such as "Good cause is required" inside the Yes branch.
-- Do not put the user's requested action, such as "Termination without notice", inside the No branch unless it is clearly the legal consequence.
-- Use edge labels "Yes" and "No" only for branches from a condition or test node to outcome/consequence nodes.
+issue, rule, condition, test, outcome, consequence, remedy, exception, limitation, duty, related
 
 Required JSON schema:
 {{
@@ -200,7 +233,7 @@ Required JSON schema:
   "nodes": [
     {{
       "id": "snake_case_id",
-      "node_type": "issue | rule | condition | test | outcome | consequence | exception | limitation | duty | related",
+      "node_type": "issue | rule | condition | test | outcome | consequence | remedy | exception | limitation | duty | related",
       "label": "short plain-English legal content",
       "description": "",
       "article_label": "Art. number or null",
@@ -231,7 +264,7 @@ Good decision example:
       "source_url": null
     }},
     {{
-      "id": "condition_good_cause",
+      "id": "good_cause",
       "node_type": "condition",
       "label": "Good cause is required",
       "description": "",
@@ -239,7 +272,7 @@ Good decision example:
       "source_url": null
     }},
     {{
-      "id": "test_unreasonable_to_continue",
+      "id": "unreasonable_to_continue",
       "node_type": "test",
       "label": "Continuing must be unreasonable",
       "description": "",
@@ -247,7 +280,7 @@ Good decision example:
       "source_url": null
     }},
     {{
-      "id": "outcome_employer_may_dismiss",
+      "id": "employer_may_dismiss",
       "node_type": "outcome",
       "label": "Employer may dismiss immediately",
       "description": "",
@@ -255,8 +288,8 @@ Good decision example:
       "source_url": null
     }},
     {{
-      "id": "consequence_employee_claim",
-      "node_type": "consequence",
+      "id": "employee_claim",
+      "node_type": "remedy",
       "label": "Employee may claim damages",
       "description": "",
       "article_label": "Art. 337c",
@@ -264,26 +297,10 @@ Good decision example:
     }}
   ],
   "edges": [
-    {{
-      "source": "issue",
-      "target": "condition_good_cause",
-      "label": null
-    }},
-    {{
-      "source": "condition_good_cause",
-      "target": "test_unreasonable_to_continue",
-      "label": null
-    }},
-    {{
-      "source": "test_unreasonable_to_continue",
-      "target": "outcome_employer_may_dismiss",
-      "label": "Yes"
-    }},
-    {{
-      "source": "test_unreasonable_to_continue",
-      "target": "consequence_employee_claim",
-      "label": "No"
-    }}
+    {{"source": "issue", "target": "good_cause", "label": null}},
+    {{"source": "good_cause", "target": "unreasonable_to_continue", "label": null}},
+    {{"source": "unreasonable_to_continue", "target": "employer_may_dismiss", "label": "Yes"}},
+    {{"source": "unreasonable_to_continue", "target": "employee_claim", "label": "No"}}
   ]
 }}
 
@@ -318,14 +335,6 @@ Good overview example:
       "source_url": null
     }},
     {{
-      "id": "hardship_advance",
-      "node_type": "related",
-      "label": "Hardship advance possible",
-      "description": "",
-      "article_label": "Art. 323",
-      "source_url": null
-    }},
-    {{
       "id": "salary_statement",
       "node_type": "duty",
       "label": "Salary statement required",
@@ -335,40 +344,139 @@ Good overview example:
     }}
   ],
   "edges": [
-    {{
-      "source": "issue",
-      "target": "monthly_payment",
-      "label": null
-    }},
-    {{
-      "source": "monthly_payment",
-      "target": "custom_terms",
-      "label": null
-    }},
-    {{
-      "source": "custom_terms",
-      "target": "hardship_advance",
-      "label": null
-    }},
-    {{
-      "source": "hardship_advance",
-      "target": "salary_statement",
-      "label": null
-    }}
+    {{"source": "issue", "target": "monthly_payment", "label": null}},
+    {{"source": "monthly_payment", "target": "custom_terms", "label": null}},
+    {{"source": "custom_terms", "target": "salary_statement", "label": null}}
   ]
 }}
-
-Bad examples to avoid:
-- A test node with label "HOW TO DECIDE".
-- A Yes outcome node with label "Good cause required".
-- A No consequence node with label "Termination without notice".
-- A salary payment overview graph with Yes/No branches.
-- A graph that uses the same phrase for node_type and label.
-- A graph that reverses employer and employee roles.
 
 Return only valid JSON.
 """.strip()
 
+def build_combined_answer_map_prompt(
+    query: str,
+    chunks: list[RetrievedChunk],
+) -> str:
+    """
+    Build a single prompt that returns both the user-facing answer and the
+    reasoning map in one JSON object.
+
+    This is used for text_map mode to avoid two separate LLM calls with
+    duplicated source context.
+    """
+    source_context = format_source_block(chunks)
+
+    return f"""
+User question:
+{query}
+
+Retrieved legal sources:
+{source_context}
+
+Task:
+Answer the user's question and create a compact legal reasoning map.
+
+Use only the retrieved legal sources.
+
+Return only valid JSON.
+Do not include markdown.
+Do not include explanations outside the JSON.
+
+Required JSON schema:
+{{
+  "answer": "concise plain-English answer",
+  "reasoning_map": {{
+    "title": "Legal reasoning map",
+    "map_type": "decision | overview | consequence | duty | mixed",
+    "summary": "short sentence describing the map",
+    "nodes": [
+      {{
+        "id": "snake_case_id",
+        "node_type": "issue | rule | condition | test | outcome | consequence | remedy | exception | limitation | duty | related",
+        "label": "short plain-English legal content",
+        "description": "",
+        "article_label": "Art. number or null",
+        "source_url": null
+      }}
+    ],
+    "edges": [
+      {{
+        "source": "source node id",
+        "target": "target node id",
+        "label": "Yes | No | null"
+      }}
+    ]
+  }}
+}}
+
+Core rules:
+- Use only the retrieved legal sources.
+- Do not invent legal rules, article numbers, procedures, cases, remedies, deadlines, exceptions, or consequences.
+- Do not mention article numbers that are not included in the retrieved sources.
+- Do not write phrases like "Art. X is not provided".
+- Do not refer to "retrieved sources" in the final answer.
+- Never reverse the legal actor in the user's question.
+- Use article references naturally, for example "under Art. 337" or "Art. 337c provides...".
+- The answer and reasoning_map must not contradict each other.
+
+Actor and action alignment:
+- Identify the legal actor in the user's question before answering.
+- Keep the answer and map focused on the same actor, action, and legal direction as the user's question.
+- If the user asks about an employer action, explain the employer's power, duty, liability, or risk.
+- If the user asks about an employee action, explain the employee's right, duty, liability, or risk.
+- Do not use a rule about the opposite party's action as the main answer or main graph path unless the user's question also asks about that opposite action.
+- Do not convert an employer dismissal question into an employee resignation, absence, or no-show question.
+- Do not convert an employee resignation or leaving question into an employer dismissal question.
+- If a retrieved article concerns a different actor or a different legal action, do not use it as the main legal basis. Mention it only if clearly relevant as a contrast or secondary point.
+
+Answer rules:
+- Start the answer directly.
+- Keep the answer concise and user-facing.
+- Prefer 2 to 4 short paragraphs.
+- Prioritize the legal points that directly answer the user's question.
+- If several retrieved articles are relevant, group them briefly instead of explaining each one in full.
+- Mention secondary or special-case rules only if they materially affect the answer.
+- For broad overview questions, summarize the main rules first and avoid expanding every special case.
+- Do not use headings such as "Answer:", "Direct answer:", "Explanation:", or "Follow-up:".
+- Ask a follow-up question only when the user's provided facts are insufficient and one missing fact could materially change the legal outcome.
+
+Reasoning map rules:
+- Use 3 to 6 nodes. Prefer 4 or 5.
+- Keep node labels short, concrete, and user-friendly.
+- A node label should usually be under 8 words.
+- Use plain English.
+- Use description as an empty string unless a short clarification is truly necessary.
+- Do not repeat the user's full question as a node.
+- Do not use generic role names as labels.
+- Bad labels: "How to decide", "Condition", "Outcome", "Legal issue", "Rule".
+- Good labels: "Good cause is required", "Paid at month end", "Compensation may be owed".
+- Use article_label only when the article clearly supports the node.
+- If no article clearly supports a node, use null for article_label.
+- Use null for source_url unless the source URL is explicitly available.
+- Do not force every question into a decision graph.
+
+Map type guidance:
+- decision: use when the user asks whether someone can, may, must, is allowed to, or is entitled to do something.
+- overview: use when the user asks for general rules about a topic.
+- consequence: use when the user asks what happens if something occurs, what liability follows, or what can be claimed.
+- duty: use when the user asks what an employer or employee must do.
+- mixed: use only when the question clearly combines more than one type.
+
+Recommended structures:
+- decision: issue -> condition -> test -> yes outcome / no consequence
+- overview: issue -> main rule -> variation / exception -> special case -> related consequence
+- consequence: triggering event -> legal consequence -> remedy or claim -> limitation
+- duty: legal relationship -> main duty -> specific duty -> limit or consequence
+- mixed: issue -> key rule -> related rule -> consequence or next step
+
+Branch rules:
+- Use Yes/No branches only when there is a true condition-based legal assessment.
+- The Yes branch should state the result if the condition is satisfied.
+- The No branch should state the consequence or risk if the condition is not satisfied.
+- Do not put the condition itself inside the Yes or No outcome.
+
+Return only valid JSON.
+""".strip()
 
 def build_answer_prompt(
     query: str,
@@ -378,8 +486,8 @@ def build_answer_prompt(
     """
     Build a source-grounded answer prompt.
 
-    The answer should be guided by the reasoning map when available, but the
-    final text should still read naturally as a conversational legal answer.
+    The answer should remain concise and source-grounded. The reasoning map is
+    optional; when unavailable, the answer should still be complete enough.
     """
     source_context = format_source_block(chunks)
 
@@ -415,8 +523,18 @@ Core rules:
 - Do not refer to "retrieved sources" in the final answer.
 - Never reverse the legal actor in the user's question.
 - Use article references naturally, for example "under Art. 337" or "Art. 337c provides...".
-- Use the reasoning map as the structure of the answer when it is available.
+- Use the reasoning map as a helpful structure when it is available.
 - The answer and the reasoning map must not contradict each other.
+
+Actor and action alignment:
+- Identify the legal actor in the user's question before answering.
+- Keep the answer focused on the same actor, action, and legal direction as the user's question.
+- If the user asks about an employer action, explain the employer's power, duty, liability, or risk.
+- If the user asks about an employee action, explain the employee's right, duty, liability, or risk.
+- Do not use a rule about the opposite party's action as the main answer unless the user's question also asks about that opposite action.
+- Do not convert an employer dismissal question into an employee resignation, absence, or no-show question.
+- Do not convert an employee resignation or leaving question into an employer dismissal question.
+- If a retrieved article concerns a different actor or a different legal action, mention it only if it is clearly relevant as a contrast or secondary point.
 
 Answer focus:
 - Start with the direct answer.
@@ -450,7 +568,4 @@ Required answer style:
 - Mention the cited article naturally next to the legal point it supports.
 - If the available legal sources provide a general standard but not concrete examples, explain that the result depends on the specific facts.
 - If a follow-up question is necessary under the Follow-up rule, place it naturally at the end.
-
 """.strip()
-
-
