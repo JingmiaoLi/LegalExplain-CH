@@ -263,10 +263,6 @@ Legal information systems must avoid unsupported legal claims. This project ther
 
 A legal reasoning map can make the answer easier to understand, but it is not always necessary. The project separates text answer generation from graph generation to support different latency and cost trade-offs.
 
-### Why local and cloud deployment differ
-
-The local version can use heavier retrieval components such as dense embeddings and reranking. Cloud deployment on low-memory free tiers may require a lighter retrieval backend or API-based embeddings. The repository currently prioritizes the complete local RAG experience.
-
 ## Limitations
 
 * The system provides legal information, not legal advice.
