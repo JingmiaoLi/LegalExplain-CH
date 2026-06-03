@@ -194,6 +194,17 @@ Grounding rules:
 - Use null for source_url unless explicitly available.
 - Preserve the legal actor in the user's question.
 - Never reverse employer and employee roles.
+- Keep the map focused on the same actor, action, and legal direction as the user's question.
+- If a retrieved article concerns a different actor or legal action, do not use it as the main graph path unless it is clearly relevant.
+
+Follow-up question rules:
+- If the user asks a follow-up question that adds a new fact, the map should focus on how that new fact affects the previous legal issue.
+- Do not simply repeat the general map from the previous question.
+- Make the new fact appear in the issue, condition, or test node when it materially affects the answer.
+- If the user asks whether a specific fact changes the legal outcome, make that fact central to the test node.
+- Do not repeat only the general legal test from the previous question.
+- For example, if the follow-up is "What if I was late twice?" after an immediate-dismissal question, the map should test whether the lateness is serious enough to amount to good cause.
+- For fact-specific follow-ups, use this structure when possible: new fact -> legal requirement -> fact-specific test -> Yes outcome / No consequence.
 
 Choose one map_type:
 - decision: whether someone can, may, must, is allowed to, or is entitled to do something.
@@ -221,6 +232,13 @@ Graph rules:
 - Do not force overview, consequence, duty, or mixed questions into Yes/No branches.
 - Use Yes/No branches only when there is a true condition-based legal assessment.
 - Use node_type "test" only when there is a real legal standard to evaluate.
+- If the question asks whether a specific fact justifies a legal action, make that fact the central test node.
+- In a decision map, Yes and No outcomes must both branch directly from the same condition or test node.
+- Do not connect the No-branch consequence after the Yes-branch outcome.
+- A consequence that applies when the condition is not satisfied must be connected with a "No" edge from the condition or test node.
+- A positive legal outcome must be connected with a "Yes" edge from the condition or test node.
+- Do not create a linear chain where the Yes outcome leads to the No consequence.
+- If both a Yes outcome and a No consequence are present, they must be sibling branches from the same condition or test node.
 
 Allowed node_type values:
 issue, rule, condition, test, outcome, consequence, remedy, exception, limitation, duty, related
@@ -304,6 +322,61 @@ Good decision example:
   ]
 }}
 
+Good fact-specific follow-up example:
+{{
+  "title": "Legal reasoning map",
+  "map_type": "decision",
+  "summary": "A short path showing whether lateness may justify immediate dismissal.",
+  "nodes": [
+    {{
+      "id": "issue",
+      "node_type": "issue",
+      "label": "Immediate dismissal for lateness",
+      "description": "",
+      "article_label": null,
+      "source_url": null
+    }},
+    {{
+      "id": "good_cause",
+      "node_type": "condition",
+      "label": "Good cause is required",
+      "description": "",
+      "article_label": "Art. 337",
+      "source_url": null
+    }},
+    {{
+      "id": "lateness_serious_enough",
+      "node_type": "test",
+      "label": "Lateness serious enough?",
+      "description": "",
+      "article_label": "Art. 337",
+      "source_url": null
+    }},
+    {{
+      "id": "employer_may_dismiss",
+      "node_type": "outcome",
+      "label": "Employer may dismiss immediately",
+      "description": "",
+      "article_label": "Art. 337",
+      "source_url": null
+    }},
+    {{
+      "id": "employee_claim",
+      "node_type": "remedy",
+      "label": "Employee may claim damages",
+      "description": "",
+      "article_label": "Art. 337c",
+      "source_url": null
+    }}
+  ],
+  "edges": [
+    {{"source": "issue", "target": "good_cause", "label": null}},
+    {{"source": "good_cause", "target": "lateness_serious_enough", "label": null}},
+    {{"source": "lateness_serious_enough", "target": "employer_may_dismiss", "label": "Yes"}},
+    {{"source": "lateness_serious_enough", "target": "employee_claim", "label": "No"}}
+  ]
+}}
+
 Good overview example:
 {{
   "title": "Legal reasoning map",
@@ -352,6 +425,7 @@ Good overview example:
 
 Return only valid JSON.
 """.strip()
+
 
 def build_combined_answer_map_prompt(
     query: str,
@@ -528,6 +602,8 @@ Citation rules:
 - Mention the supporting article naturally next to each legal rule, requirement, right, duty, remedy, limitation, or consequence.
 - Do not omit article references.
 - Use article references naturally, for example "under Art. 337" or "Art. 337c provides...".
+- Use article references in the form "under Art. 337" or "Art. 337 provides...", not as isolated parenthetical references such as "(Art. 337)".
+- Do not group multiple article references together at the end of a paragraph; place each article next to the specific rule or consequence it supports.
 - If the answer discusses good cause for immediate termination, mention Art. 337 in that sentence or paragraph when Art. 337 is available.
 - If the answer discusses damages or compensation after unjustified immediate dismissal, mention Art. 337c in that sentence or paragraph when Art. 337c is available.
 
@@ -546,8 +622,12 @@ Answer style:
 - Do not write headings such as "Answer:", "Direct answer:", "Relevant legal points:", "Key legal points:", "Explanation:", or "Follow-up:".
 - Write in natural plain English for non-lawyers.
 - Prefer 1 to 2 short paragraphs. Do not add a separate concluding paragraph that merely repeats the answer.
-- For follow-up questions, answer only the new factual variation and avoid repeating the full rule from the previous answer.
-- The first paragraph should directly answer the user's question.
+- The first paragraph must directly answer the user's current question, not merely restate the general legal background.
+- For follow-up questions, answer the new factual variation first.
+- Do not start a follow-up answer by restating the full general rule from the previous answer.
+- If the follow-up adds a specific fact, begin with whether that fact likely changes the legal outcome.
+- Then briefly connect that fact back to the relevant legal rule and article.
+- For example, if the follow-up asks "What if I was late twice?" after an immediate-dismissal question, start by explaining whether being late twice automatically justifies immediate dismissal.
 - Then briefly explain the main applicable legal rule and any central consequence.
 - Prioritize legal points that directly answer the question.
 - Mention secondary or special-case rules only if they materially affect the answer.
