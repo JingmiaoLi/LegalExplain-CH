@@ -128,11 +128,10 @@ The OpenAI API key should only be used on the backend. It should never be expose
 ## Project Structure
 
 ```text
-law_rag/
+LegalExplain-CH/
 ├── backend/
 │   ├── app/
-│   │   └── api/
-│   │       └── routes/
+│   │   └── main.py
 │   ├── generation/
 │   │   ├── answer_generator.py
 │   │   └── prompts.py
@@ -140,16 +139,24 @@ law_rag/
 │   │   ├── dense_retriever.py
 │   │   ├── keyword_retriever.py
 │   │   ├── hybrid_retriever.py
+│   │   ├── reranker.py
 │   │   └── schemas.py
+│   ├── services/
+│   │   └── workflow.py
+│   ├── tests/
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx
+│   │   ├── App.css
 │   │   ├── api.ts
-│   │   └── components/
+│   │   └── main.tsx
 │   └── package.json
 ├── data/
+│   ├── raw/
 │   └── processed/
+├── docs/
+│   └── screenshots/
 ├── scripts/
 └── README.md
 ```
